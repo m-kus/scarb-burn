@@ -161,7 +161,6 @@ fn main_inner(args: Args) -> Result<()> {
     println!("Flamegraph written to {}", args.output_file);
 
     if let RunResultValue::Panic(values) = result.value {
-        print!("panicked with [");
         let msg = values
             .iter()
             .map(|v| as_cairo_short_string(v).unwrap_or_else(|| v.to_string()))
