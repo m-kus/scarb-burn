@@ -1,0 +1,24 @@
+[package]
+name = "scarb-burn"
+version = "2.10.0"
+edition = "2021"
+publish = false
+authors = ["Michael Zaikin <michael.zaikin@starkware.co>"]
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+camino = "1"
+clap = { version = "4", features = ["derive", "env", "string"] }
+num-bigint = "0.4"
+serde = "1"
+serde_json = "1"
+inferno = "0.12.1"
+webbrowser = "0.8"
+
+cairo-lang-runner = "2.10.0-rc.1"
+cairo-lang-sierra = "2.10.0-rc.1"
+cairo-lang-utils = "2.10.0-rc.1"
+
+scarb-metadata = "1.13.0"
+scarb-ui = "0.1.5"
