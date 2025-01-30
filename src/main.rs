@@ -7,16 +7,28 @@ use cairo_lang_runner::{
 use cairo_lang_sierra::program::VersionedProgram;
 use cairo_lang_utils::bigint::BigUintAsHex;
 use camino::Utf8PathBuf;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use inferno::flamegraph::{from_lines, Options};
 use num_bigint::BigInt;
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::process::ExitCode;
+use std::time::SystemTime;
 use webbrowser;
 
+use pprof::protos::Message;
+use pprof::{Frames, Report, Symbol};
 use scarb_metadata::{Metadata, MetadataCommand, ScarbCommand};
 use scarb_ui::args::PackagesFilter;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+
+#[derive(ValueEnum, Clone, Debug)]
+enum OutputType {
+    Flamegraph,
+    Pprof,
+}
 
 /// Execute the main function of a package.
 #[derive(Parser, Clone, Debug)]
@@ -38,11 +50,15 @@ struct Args {
     #[arg(long, conflicts_with = "arguments")]
     arguments_file: Option<Utf8PathBuf>,
 
-    /// Path to write the FlameGraph SVG file.
+    /// Output file type
+    #[arg(long, value_enum, default_value_t = OutputType::Flamegraph)]
+    output_type: OutputType,
+
+    /// Path to write the output file.
     #[arg(long)]
     output_file: Utf8PathBuf,
 
-    /// Open the flamegraph in the browser.
+    /// Open the flamegraph in the browser (only works with --output-type flamegraph).
     #[arg(long, default_value_t = false)]
     open_in_browser: bool,
 }
@@ -132,6 +148,15 @@ fn main_inner(args: Args) -> Result<()> {
         )
         .with_context(|| "failed to run the function")?;
 
+    if let RunResultValue::Panic(values) = result.value {
+        let msg = values
+            .iter()
+            .map(|v| as_cairo_short_string(v).unwrap_or_else(|| v.to_string()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!("panicked with [{msg}]")
+    }
+
     let profiling_processor = ProfilingInfoProcessor::new(
         None,
         sierra_program.program,
@@ -152,28 +177,78 @@ fn main_inner(args: Args) -> Result<()> {
     let processed_profiling_info =
         profiling_processor.process(result.profiling_info.as_ref().unwrap());
 
-    let mut opt = Options::default();
     let input = processed_profiling_info.to_string();
-    let file =
-        fs::File::create(&args.output_file).with_context(|| "failed to create output file")?;
-    from_lines(&mut opt, input.lines(), file).with_context(|| "failed to write flamegraph")?;
 
-    println!("Flamegraph written to {}", args.output_file);
+    match args.output_type {
+        OutputType::Flamegraph => {
+            let mut opt = Options::default();
+            let file = fs::File::create(&args.output_file)
+                .with_context(|| "failed to create output file")?;
+            from_lines(&mut opt, input.lines(), file)
+                .with_context(|| "failed to write flamegraph")?;
 
-    if let RunResultValue::Panic(values) = result.value {
-        let msg = values
-            .iter()
-            .map(|v| as_cairo_short_string(v).unwrap_or_else(|| v.to_string()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        bail!("panicked with [{msg}]")
+            println!("Flamegraph written to {}", args.output_file);
+
+            if args.open_in_browser {
+                let absolute_path = fs::canonicalize(&args.output_file)?;
+                let url = format!("file://{}", absolute_path.display());
+                webbrowser::open(&url)?;
+            }
+        }
+        OutputType::Pprof => {
+            write_pprof(input.lines(), &args.output_file)?;
+            println!("pprof file written to {}", args.output_file);
+        }
     }
 
-    if args.open_in_browser {
-        let absolute_path = fs::canonicalize(&args.output_file)?;
-        let url = format!("file://{}", absolute_path.display());
-        webbrowser::open(&url)?;
+    Ok(())
+}
+
+fn write_pprof<'a, I>(lines: I, output_path: &Utf8PathBuf) -> Result<()>
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut data: HashMap<Frames, isize> = HashMap::new();
+    for line in lines {
+        let (stack, count_str) = line.rsplit_once(' ')
+            .ok_or_else(|| anyhow::anyhow!("invalid line format: {line}"))?;
+        
+        let frames: Vec<Vec<Symbol>> = stack
+            .split(';')
+            .map(|name| {
+                let symbol = Symbol {
+                    name: Some(name.as_bytes().to_vec()),
+                    filename: None,
+                    lineno: None,
+                    addr: None,
+                };
+                vec![symbol]
+            })
+            .collect();
+        let count: isize = count_str
+            .parse()
+            .context(format!("Failed to parse sample count: `{}`", line))?;
+
+        let frame = Frames {
+            frames,
+            thread_name: "main".into(),
+            thread_id: 0,
+            sample_timestamp: SystemTime::now(),
+        };
+        data.insert(frame, count);
     }
+
+    let report = Report {
+        data,
+        timing: Default::default(),
+    };
+    let profile = report.pprof()?;
+    let file = fs::File::create(output_path).with_context(|| "failed to create pprof output file")?;
+    let mut encoder = GzEncoder::new(file, Compression::default());
+    profile
+        .write_to_writer(&mut encoder)
+        .with_context(|| "failed to write pprof data")?;
+    encoder.finish()?;
 
     Ok(())
 }

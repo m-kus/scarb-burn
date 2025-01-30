@@ -22,3 +22,6 @@ cairo-lang-utils = "2.10.0-rc.1"
 
 scarb-metadata = "1.13.0"
 scarb-ui = "0.1.5"
+
+pprof = { version = "0.12", features = ["protobuf-codec"], default-features = false }
+flate2 = "1.0"
