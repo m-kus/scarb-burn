@@ -1,6 +1,8 @@
 # Scarb Burn
 
-Scarb extension for generating Cairo flame charts and pprof profiles.  
+Scarb extension for generating Cairo flame charts and pprof profiles.
+
+![image](https://github.com/user-attachments/assets/c94e3660-1c53-479b-b3b0-ad363cdb01fc)
 
 This is a complementary tool to [cairo-profiler](https://github.com/software-mansion/cairo-profiler), particularly useful if you have a program that consumes a large arguments file.
 
