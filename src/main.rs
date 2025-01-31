@@ -199,7 +199,7 @@ fn main_inner(args: Args) -> Result<()> {
         }
         OutputType::Pprof => {
             write_pprof(input.lines(), &args.output_file)?;
-            println!("pprof file written to {}", args.output_file);
+            println!("Profile file written to {}", args.output_file);
 
             if args.open_in_browser {
                 Command::new("go")
