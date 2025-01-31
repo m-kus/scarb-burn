@@ -13,16 +13,16 @@ use num_bigint::BigInt;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::time::SystemTime;
 use webbrowser;
 
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use pprof::protos::Message;
 use pprof::{Frames, Report, Symbol};
 use scarb_metadata::{Metadata, MetadataCommand, ScarbCommand};
 use scarb_ui::args::PackagesFilter;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 
 #[derive(ValueEnum, Clone, Debug)]
 enum OutputType {
@@ -58,7 +58,9 @@ struct Args {
     #[arg(long)]
     output_file: Utf8PathBuf,
 
-    /// Open the flamegraph in the browser (only works with --output-type flamegraph).
+    /// Open output in browser:
+    /// - For flamegraph: opens the SVG file directly
+    /// - For pprof: starts a pprof web server on port 8000 (requires Go toolchain installed)
     #[arg(long, default_value_t = false)]
     open_in_browser: bool,
 }
@@ -198,6 +200,18 @@ fn main_inner(args: Args) -> Result<()> {
         OutputType::Pprof => {
             write_pprof(input.lines(), &args.output_file)?;
             println!("pprof file written to {}", args.output_file);
+
+            if args.open_in_browser {
+                Command::new("go")
+                    .args([
+                        "tool",
+                        "pprof",
+                        "-http=:8000",
+                        &args.output_file.to_string(),
+                    ])
+                    .status()
+                    .with_context(|| "failed to start pprof server")?;
+            }
         }
     }
 
@@ -210,11 +224,13 @@ where
 {
     let mut data: HashMap<Frames, isize> = HashMap::new();
     for line in lines {
-        let (stack, count_str) = line.rsplit_once(' ')
+        let (stack, count_str) = line
+            .rsplit_once(' ')
             .ok_or_else(|| anyhow::anyhow!("invalid line format: {line}"))?;
-        
+
         let frames: Vec<Vec<Symbol>> = stack
             .split(';')
+            .rev()
             .map(|name| {
                 let symbol = Symbol {
                     name: Some(name.as_bytes().to_vec()),
@@ -227,7 +243,7 @@ where
             .collect();
         let count: isize = count_str
             .parse()
-            .context(format!("Failed to parse sample count: `{}`", line))?;
+            .context(format!("failed to parse sample count: `{}`", line))?;
 
         let frame = Frames {
             frames,
@@ -243,7 +259,8 @@ where
         timing: Default::default(),
     };
     let profile = report.pprof()?;
-    let file = fs::File::create(output_path).with_context(|| "failed to create pprof output file")?;
+    let file =
+        fs::File::create(output_path).with_context(|| "failed to create pprof output file")?;
     let mut encoder = GzEncoder::new(file, Compression::default());
     profile
         .write_to_writer(&mut encoder)
