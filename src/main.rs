@@ -111,7 +111,7 @@ fn main_inner(args: Args) -> Result<()> {
         path.exists(),
         format!(
             r#"
-            package has not been compiled, file does not exist: {filename}
+            Package has not been compiled, file does not exist: {filename}
             make sure you have `[lib]` target in Scarb.toml
         "#
         )
@@ -141,9 +141,21 @@ fn main_inner(args: Args) -> Result<()> {
         }),
     )?;
 
+    let entrypoint = runner.find_function("main").with_context(|| {
+        format!(
+            r#"
+            Make sure you have the following in Scarb.toml:
+
+            [cairo]
+            sierra-replace-ids = true
+
+            Error"#
+        )
+    })?;
+
     let result = runner
         .run_function_with_starknet_context(
-            runner.find_function("main")?,
+            entrypoint,
             vec![Arg::Array(program_args), Arg::Array(vec![])],
             if gas_enabled { Some(usize::MAX) } else { None },
             StarknetState::default(),
