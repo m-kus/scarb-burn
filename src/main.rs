@@ -1,9 +1,7 @@
-use anyhow::{bail, ensure, Context, Result};
-use cairo_lang_runner::profiling::{ProfilingInfoProcessor, ProfilingInfoProcessorParams};
-use cairo_lang_runner::short_string::as_cairo_short_string;
-use cairo_lang_runner::{
-    Arg, ProfilingInfoCollectionConfig, RunResultValue, SierraCasmRunner, StarknetState,
-};
+mod profiler;
+
+use anyhow::{ensure, Context, Result};
+use cairo_lang_runner::Arg;
 use cairo_lang_sierra::program::VersionedProgram;
 use cairo_lang_utils::bigint::BigUintAsHex;
 use camino::Utf8PathBuf;
@@ -117,88 +115,21 @@ fn main_inner(args: Args) -> Result<()> {
         )
     );
 
-    let sierra_program = serde_json::from_str::<VersionedProgram>(
+    let program = serde_json::from_str::<VersionedProgram>(
         &fs::read_to_string(path.clone())
             .with_context(|| format!("failed to read Sierra file: {path}"))?,
     )
-    .with_context(|| format!("failed to deserialize Sierra program: {path}"))?
-    .into_v1()
-    .with_context(|| format!("failed to load Sierra program: {path}"))?;
+    .with_context(|| format!("failed to deserialize Sierra program: {path}"))?;
 
-    let gas_enabled = sierra_program.program.requires_gas_counter();
-
-    let runner = SierraCasmRunner::new(
-        sierra_program.program.clone(),
-        if gas_enabled {
-            Some(Default::default())
-        } else {
-            None
-        },
-        Default::default(),
-        Some(ProfilingInfoCollectionConfig {
-            collect_scoped_sierra_statement_weights: true,
-            ..Default::default()
-        }),
-    )?;
-
-    let entrypoint = runner.find_function("main").with_context(|| {
-        format!(
-            r#"
-            Make sure you have the following in Scarb.toml:
-
-            [cairo]
-            sierra-replace-ids = true
-
-            Error"#
-        )
-    })?;
-
-    let result = runner
-        .run_function_with_starknet_context(
-            entrypoint,
-            vec![Arg::Array(program_args), Arg::Array(vec![])],
-            if gas_enabled { Some(usize::MAX) } else { None },
-            StarknetState::default(),
-        )
-        .with_context(|| "failed to run the function")?;
-
-    if let RunResultValue::Panic(values) = result.value {
-        let msg = values
-            .iter()
-            .map(|v| as_cairo_short_string(v).unwrap_or_else(|| v.to_string()))
-            .collect::<Vec<_>>()
-            .join(", ");
-        bail!("panicked with [{msg}]")
-    }
-
-    let profiling_processor = ProfilingInfoProcessor::new(
-        None,
-        sierra_program.program,
-        Default::default(),
-        ProfilingInfoProcessorParams {
-            min_weight: 1,
-            process_by_statement: false,
-            process_by_concrete_libfunc: false,
-            process_by_generic_libfunc: false,
-            process_by_user_function: false,
-            process_by_original_user_function: false,
-            process_by_cairo_function: false,
-            process_by_stack_trace: false,
-            process_by_cairo_stack_trace: false,
-            process_by_scoped_statement: true,
-        },
-    );
-    let processed_profiling_info =
-        profiling_processor.process(result.profiling_info.as_ref().unwrap());
-
-    let input = processed_profiling_info.to_string();
+    let profiling_info = profiler::profile(program, program_args)?;
+    let result = profiling_info.to_string();
 
     match args.output_type {
         OutputType::Flamegraph => {
             let mut opt = Options::default();
             let file = fs::File::create(&args.output_file)
                 .with_context(|| "failed to create output file")?;
-            from_lines(&mut opt, input.lines(), file)
+            from_lines(&mut opt, result.lines(), file)
                 .with_context(|| "failed to write flamegraph")?;
 
             println!("Flamegraph written to {}", args.output_file);
@@ -210,7 +141,7 @@ fn main_inner(args: Args) -> Result<()> {
             }
         }
         OutputType::Pprof => {
-            write_pprof(input.lines(), &args.output_file)?;
+            write_pprof(result.lines(), &args.output_file)?;
             println!("Profile file written to {}", args.output_file);
 
             if args.open_in_browser {
