@@ -31,7 +31,8 @@ pub fn profile(
             collect_scoped_sierra_statement_weights: true,
             ..Default::default()
         }),
-    )?;
+    )
+    .with_context(|| "failed to create SierraCasmRunner")?;
 
     let entrypoint = runner.find_function("main").with_context(|| {
         format!(
@@ -95,7 +96,7 @@ pub fn profile(
 }
 
 fn adjust_weights(weights: &mut OrderedHashMap<Vec<String>, usize>) {
-    weights.iter_mut().for_each(|(k, v)| {
+    weights.iter_mut().for_each(|(_k, _v)| {
         //println!("{}: {}", k.join(" -> "), v);
     });
 }
