@@ -42,11 +42,16 @@ struct Args {
 
     /// Serialized arguments to the executable function.
     #[arg(long, value_delimiter = ',')]
+    #[arg(long, conflicts_with_all = ["arguments_file", "profile_file"])]
     arguments: Vec<BigInt>,
 
     /// Serialized arguments to the executable function from a file.
-    #[arg(long, conflicts_with = "arguments")]
+    #[arg(long, conflicts_with_all = ["arguments", "profile_file"])]
     arguments_file: Option<Utf8PathBuf>,
+
+    /// Use a scoped profile file instead of running the program.
+    #[arg(long, conflicts_with_all = ["arguments", "arguments_file"])]
+    profile_file: Option<Utf8PathBuf>,
 
     /// Output file type
     #[arg(long, value_enum, default_value_t = OutputType::Flamegraph)]
@@ -73,56 +78,61 @@ fn main() -> ExitCode {
 }
 
 fn main_inner(args: Args) -> Result<()> {
-    let metadata = MetadataCommand::new().inherit_stderr().exec()?;
-    let package = args.packages_filter.match_one(&metadata)?;
-
-    let program_args: Vec<Arg> = if let Some(path) = args.arguments_file {
-        let file = fs::File::open(&path).with_context(|| "reading arguments file failed")?;
-        let as_vec: Vec<BigUintAsHex> =
-            serde_json::from_reader(file).with_context(|| "deserializing arguments file failed")?;
-        as_vec
-            .into_iter()
-            .map(|v| Arg::Value(v.value.into()))
-            .collect()
+    let result = if let Some(path) = &args.profile_file {
+        std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read profile file at {}", path))?
     } else {
-        args.arguments
-            .iter()
-            .map(|v| Arg::Value(v.into()))
-            .collect()
-    };
+        let metadata = MetadataCommand::new().inherit_stderr().exec()?;
+        let package = args.packages_filter.match_one(&metadata)?;
 
-    if !args.no_build {
-        let filter = PackagesFilter::generate_for::<Metadata>(vec![package.clone()].iter());
-        ScarbCommand::new()
-            .arg("build")
-            .env("SCARB_TARGET_KINDS", "lib")
-            .env("SCARB_PACKAGES_FILTER", filter.to_env())
-            .run()?;
-    }
+        let program_args: Vec<Arg> = if let Some(path) = args.arguments_file {
+            let file = fs::File::open(&path).with_context(|| "reading arguments file failed")?;
+            let as_vec: Vec<BigUintAsHex> =
+                serde_json::from_reader(file).with_context(|| "deserializing arguments file failed")?;
+            as_vec
+                .into_iter()
+                .map(|v| Arg::Value(v.value.into()))
+                .collect()
+        } else {
+            args.arguments
+                .iter()
+                .map(|v| Arg::Value(v.into()))
+                .collect()
+        };
 
-    let filename = format!("{}.sierra.json", package.name);
-    let path = Utf8PathBuf::from(env::var("SCARB_TARGET_DIR")?)
-        .join(env::var("SCARB_PROFILE")?)
-        .join(filename.clone());
+        if !args.no_build {
+            let filter = PackagesFilter::generate_for::<Metadata>(vec![package.clone()].iter());
+            ScarbCommand::new()
+                .arg("build")
+                .env("SCARB_TARGET_KINDS", "lib")
+                .env("SCARB_PACKAGES_FILTER", filter.to_env())
+                .run()?;
+        }
 
-    ensure!(
-        path.exists(),
-        format!(
-            r#"
-            Package has not been compiled, file does not exist: {filename}
-            make sure you have `[lib]` target in Scarb.toml
-        "#
+        let filename = format!("{}.sierra.json", package.name);
+        let path = Utf8PathBuf::from(env::var("SCARB_TARGET_DIR")?)
+            .join(env::var("SCARB_PROFILE")?)
+            .join(filename.clone());
+
+        ensure!(
+            path.exists(),
+            format!(
+                r#"
+                Package has not been compiled, file does not exist: {filename}
+                make sure you have `[lib]` target in Scarb.toml
+            "#
+            )
+        );
+
+        let program = serde_json::from_str::<VersionedProgram>(
+            &fs::read_to_string(path.clone())
+                .with_context(|| format!("failed to read Sierra file: {path}"))?,
         )
-    );
+        .with_context(|| format!("failed to deserialize Sierra program: {path}"))?;
 
-    let program = serde_json::from_str::<VersionedProgram>(
-        &fs::read_to_string(path.clone())
-            .with_context(|| format!("failed to read Sierra file: {path}"))?,
-    )
-    .with_context(|| format!("failed to deserialize Sierra program: {path}"))?;
-
-    let profiling_info = profiler::profile(program, program_args)?;
-    let result = profiling_info.to_string();
+        let profiling_info = profiler::profile(program, program_args)?;
+        profiling_info.to_string()
+    };
 
     match args.output_type {
         OutputType::Flamegraph => {
