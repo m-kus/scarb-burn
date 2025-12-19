@@ -64,25 +64,22 @@ pub fn profile(
         bail!("panicked with [{msg}]")
     }
 
-    let profiling_processor = ProfilingInfoProcessor::new(
-        None,
-        sierra_program.program,
-        Default::default(),
-        ProfilingInfoProcessorParams {
-            min_weight: 1,
-            process_by_statement: false,
-            process_by_concrete_libfunc: false,
-            process_by_generic_libfunc: false,
-            process_by_user_function: false,
-            process_by_original_user_function: false,
-            process_by_cairo_function: false,
-            process_by_stack_trace: false,
-            process_by_cairo_stack_trace: false,
-            process_by_scoped_statement: true,
-        },
-    );
+    let profiling_processor =
+        ProfilingInfoProcessor::new(None, &sierra_program.program, Default::default());
+    let profiling_params = ProfilingInfoProcessorParams {
+        min_weight: 1,
+        process_by_statement: false,
+        process_by_concrete_libfunc: false,
+        process_by_generic_libfunc: false,
+        process_by_user_function: false,
+        process_by_original_user_function: false,
+        process_by_cairo_function: false,
+        process_by_stack_trace: false,
+        process_by_cairo_stack_trace: false,
+        process_by_scoped_statement: true,
+    };
     let mut processed_profiling_info =
-        profiling_processor.process(result.profiling_info.as_ref().unwrap());
+        profiling_processor.process(result.profiling_info.as_ref().unwrap(), &profiling_params);
 
     // Adjust weights according to the builtins/libfuncs table
     if let Some(scoped_sierra_statement_weights) = processed_profiling_info

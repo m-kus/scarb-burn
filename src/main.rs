@@ -80,15 +80,15 @@ fn main() -> ExitCode {
 fn main_inner(args: Args) -> Result<()> {
     let result = if let Some(path) = &args.profile_file {
         std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read profile file at {}", path))?
+            .with_context(|| format!("failed to read profile file at {}", path))?
     } else {
         let metadata = MetadataCommand::new().inherit_stderr().exec()?;
         let package = args.packages_filter.match_one(&metadata)?;
 
         let program_args: Vec<Arg> = if let Some(path) = args.arguments_file {
             let file = fs::File::open(&path).with_context(|| "reading arguments file failed")?;
-            let as_vec: Vec<BigUintAsHex> =
-                serde_json::from_reader(file).with_context(|| "deserializing arguments file failed")?;
+            let as_vec: Vec<BigUintAsHex> = serde_json::from_reader(file)
+                .with_context(|| "deserializing arguments file failed")?;
             as_vec
                 .into_iter()
                 .map(|v| Arg::Value(v.value.into()))
